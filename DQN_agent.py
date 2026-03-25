@@ -75,16 +75,53 @@ class DQAgent(object):
     def greedy_action(self, obs):
         obs = torch.tensor(obs).float().to(self.device)
         obs = obs.unsqueeze(0)
-        action = self.policy_net(obs).argmax().item()
+        
+        # On s'assure que le réseau est en mode évaluation (Dropout désactivé) pour une vraie prédiction pure
+        self.policy_net.eval()
+        with torch.no_grad():
+            action = self.policy_net(obs).argmax().item()
         return action
 
-    # Returns an action based on epsilon greedy method
-    def choose_action(self, obs):
-        if random.random() > self.eps:
-            action = self.greedy_action(obs)
+    def choose_action(self, obs, n_passes=10, threshold=0.5):
+        # S'assurer que les dimensions sont correctes pour le réseau (batch_size, channels, H, W)
+        obs_tensor = torch.tensor(obs).float().to(self.device)
+        if len(obs_tensor.shape) == 3:
+            obs_tensor = obs_tensor.unsqueeze(0)
+        
+        # 1. FORCER LE MODE ENTRAÎNEMENT
+        self.policy_net.train()
+        
+        q_values_list = []
+        
+        # 2. FAIRE PASSER LA MÊME IMAGE n FOIS
+        with torch.no_grad():
+            for _ in range(n_passes):
+                q_values = self.policy_net(obs_tensor)
+                q_values_list.append(q_values)
+                
+        # 3. EMPILER LES RÉSULTATS
+        q_values_stacked = torch.cat(q_values_list, dim=0)
+        
+        # 4. CALCULER LA MOYENNE ET L'ÉCART TYPE
+        q_mean = q_values_stacked.mean(dim=0)
+        q_std = q_values_stacked.std(dim=0)
+        
+        # 5. IDENTIFIER LA MEILLEURE ACTION
+        best_action = q_mean.argmax().item()
+        
+        # 6. RÉCUPÉRER L'INCERTITUDE DE CETTE ACTION
+        uncertainty = q_std[best_action].item()
+        
+        # 7. L'ARBRE DE DÉCISION
+        if uncertainty < threshold:
+            # Le modèle est confiant : Exploitation
+            return best_action
         else:
-            action = random.choice([x for x in range(self.action_space)])
-        return action
+            # Le modèle doute : Exploration (Epsilon-Greedy fallback)
+            if random.random() > self.eps:
+                return best_action
+            else:
+                return random.choice([x for x in range(self.action_space)])
     
     # Stores a transition into memory
     def store_transition(self, *args):
@@ -148,7 +185,7 @@ class DQAgent(object):
         frames[0].save('episode.gif', format='GIF', append_images=frames[1:], save_all=True, duration=10, loop=0)
 
     # Plays num_eps amount of games, while optimizing the model after each episode
-    def train(self, num_eps=100, render=False):
+    def train(self, num_eps=100, render=True):
         scores = []
         max_score = 0
 

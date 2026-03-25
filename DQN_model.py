@@ -27,6 +27,7 @@ class DQN(nn.Module):
         self.l2 = nn.Sequential(
             nn.Linear(conv_output_size, lin1_output_size),
             nn.ReLU(),
+            nn.Dropout(p=0.2),  # on ajoute le dropout 
             nn.Linear(lin1_output_size, output_dim)
         )
 
