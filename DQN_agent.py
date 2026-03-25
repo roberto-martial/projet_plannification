@@ -5,6 +5,7 @@ import numpy as np
 import random
 import math
 import time
+from collections import deque  # Ajout de l'import pour le Frame Stacking
 from replay_mem import ReplayBuffer
 from DQN_model import DQN
 from transforms import Transforms
@@ -83,45 +84,39 @@ class DQAgent(object):
         return action
 
     def choose_action(self, obs, n_passes=10, threshold=0.5):
-        # S'assurer que les dimensions sont correctes pour le réseau (batch_size, channels, H, W)
+        # 1. PRIORITÉ ABSOLUE À L'EXPLORATION CLASSIQUE (Epsilon)
+        # Au début, eps = 1.0, donc il va obligatoirement tester des actions au hasard,
+        # ce qui garantit qu'il finira par appuyer sur "FIRE" (action 1) pour lancer la balle.
+        if random.random() < self.eps:
+            return random.choice([x for x in range(self.action_space)])
+
+        # 2. SINON, ON UTILISE LE RÉSEAU ET LE DROPOUT
         obs_tensor = torch.tensor(obs).float().to(self.device)
         if len(obs_tensor.shape) == 3:
             obs_tensor = obs_tensor.unsqueeze(0)
         
-        # 1. FORCER LE MODE ENTRAÎNEMENT
         self.policy_net.train()
-        
         q_values_list = []
         
-        # 2. FAIRE PASSER LA MÊME IMAGE n FOIS
         with torch.no_grad():
             for _ in range(n_passes):
-                q_values = self.policy_net(obs_tensor)
-                q_values_list.append(q_values)
+                q_values_list.append(self.policy_net(obs_tensor))
                 
-        # 3. EMPILER LES RÉSULTATS
         q_values_stacked = torch.cat(q_values_list, dim=0)
         
-        # 4. CALCULER LA MOYENNE ET L'ÉCART TYPE
         q_mean = q_values_stacked.mean(dim=0)
         q_std = q_values_stacked.std(dim=0)
         
-        # 5. IDENTIFIER LA MEILLEURE ACTION
         best_action = q_mean.argmax().item()
-        
-        # 6. RÉCUPÉRER L'INCERTITUDE DE CETTE ACTION
         uncertainty = q_std[best_action].item()
         
-        # 7. L'ARBRE DE DÉCISION
+        # 3. L'ARBRE DE DÉCISION BASÉ SUR L'INCERTITUDE
         if uncertainty < threshold:
             # Le modèle est confiant : Exploitation
             return best_action
         else:
-            # Le modèle doute : Exploration (Epsilon-Greedy fallback)
-            if random.random() > self.eps:
-                return best_action
-            else:
-                return random.choice([x for x in range(self.action_space)])
+            # Le modèle doute : Exploration de secours
+            return random.choice([x for x in range(self.action_space)])
     
     # Stores a transition into memory
     def store_transition(self, *args):
@@ -182,35 +177,50 @@ class DQAgent(object):
             frame = Image.fromarray(self.memory.memory[i].raw_state, mode='RGB')
             frames.append(frame)
         
-        frames[0].save('episode.gif', format='GIF', append_images=frames[1:], save_all=True, duration=10, loop=0)
+        if frames:
+            frames[0].save('episode.gif', format='GIF', append_images=frames[1:], save_all=True, duration=10, loop=0)
 
     # Plays num_eps amount of games, while optimizing the model after each episode
     def train(self, num_eps=100, render=True):
         scores = []
         max_score = 0
+        stack_size = 4  # On définit la taille de l'empilement
 
         for i in range(num_eps):
             done = False
-
-            # Modifié ici : Déballage du tuple renvoyé par reset()
             obs, _ = self.env.reset()
-            state = Transforms.to_gray(obs)
+            
+            # Prétraitement initial et retrait de la dimension de canal éventuelle (ex: 1x84x84 -> 84x84)
+            processed_frame = np.squeeze(Transforms.to_gray(obs))
+            
+            # Initialisation du deque avec 4 copies de la première image
+            stacked_frames = deque([processed_frame for _ in range(stack_size)], maxlen=stack_size)
+            
+            # Création de l'état initial (4, 84, 84)
+            state = np.stack(stacked_frames, axis=0)
             
             score = 0
             cnt = 0
             while not done:
-                # Take epsilon greedy action
+                # Take action
                 action = self.choose_action(state)
                 
-                # Modifié ici : Gestion de terminated et truncated pour l'action step()
                 obs_, reward, terminated, truncated, _ = self.env.step(action)
                 done = terminated or truncated
                 
                 if render:
                     self.env.render()
 
-                # Preprocess next state and store transition
-                state_ = Transforms.to_gray(obs, obs_)
+                # Preprocess next state
+                processed_frame_ = np.squeeze(Transforms.to_gray(obs, obs_))
+                
+                # Ajout de la nouvelle image au deque (la plus ancienne est éjectée)
+                stacked_frames.append(processed_frame_)
+                
+                # Nouvel état empilé
+                state_ = np.stack(stacked_frames, axis=0)
+                
+                # Store transition
                 self.store_transition(state, action, reward, state_, int(done), obs)
 
                 score += reward
@@ -239,18 +249,21 @@ class DQAgent(object):
     # This function simply lets a pretrained model be evaluated to play a game
     # No learning will be done
     def play_games(self, num_eps, render=True):
-
         # Set network to eval mode
         self.policy_net.eval()
-
         scores = []
+        stack_size = 4  # Même taille d'empilement que pour l'entraînement
 
         for i in range(num_eps):
             done = False
-
-            # Modifié ici : Déballage du tuple renvoyé par reset()
             obs, _ = self.env.reset()
-            state = Transforms.to_gray(obs)
+            
+            # Prétraitement initial
+            processed_frame = np.squeeze(Transforms.to_gray(obs))
+            
+            # Initialisation du deque
+            stacked_frames = deque([processed_frame for _ in range(stack_size)], maxlen=stack_size)
+            state = np.stack(stacked_frames, axis=0)
             
             score = 0
             cnt = 0
@@ -258,15 +271,17 @@ class DQAgent(object):
                 # Take the greedy action and observe next state
                 action = self.greedy_action(state)
                 
-                # Modifié ici : Gestion de terminated et truncated pour l'action step()
                 obs_, reward, terminated, truncated, _ = self.env.step(action)
                 done = terminated or truncated
                 
                 if render:
                     self.env.render()
 
-                # Preprocess next state and store transition
-                state_ = Transforms.to_gray(obs, obs_)
+                # Preprocess next state
+                processed_frame_ = np.squeeze(Transforms.to_gray(obs, obs_))
+                stacked_frames.append(processed_frame_)
+                state_ = np.stack(stacked_frames, axis=0)
+                
                 self.store_transition(state, action, reward, state_, int(done), obs)
 
                 # Calculate score, set next state and obs and increment counter
