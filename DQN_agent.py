@@ -64,11 +64,12 @@ class DQAgent(object):
         state_shape = batch.state[0].shape
 
         # Convert to tensors with correct dimensions
-        state = torch.tensor(batch.state).view(self.batch_size, -1, state_shape[1], state_shape[2]).float().to(self.device)
-        action = torch.tensor(batch.action).unsqueeze(1).to(self.device)
-        reward = torch.tensor(batch.reward).float().unsqueeze(1).to(self.device)
-        state_ = torch.tensor(batch.state_).view(self.batch_size, -1, state_shape[1], state_shape[2]).float().to(self.device)
-        done = torch.tensor(batch.done).float().unsqueeze(1).to(self.device)
+    
+        state = torch.tensor(np.array(batch.state)).view(self.batch_size, -1, state_shape[1], state_shape[2]).float().to(self.device)
+        action = torch.tensor(np.array(batch.action)).unsqueeze(1).to(self.device)
+        reward = torch.tensor(np.array(batch.reward)).float().unsqueeze(1).to(self.device)
+        state_ = torch.tensor(np.array(batch.state_)).view(self.batch_size, -1, state_shape[1], state_shape[2]).float().to(self.device)
+        done = torch.tensor(np.array(batch.done)).float().unsqueeze(1).to(self.device)
 
         return state, action, reward, state_, done
 
@@ -83,7 +84,7 @@ class DQAgent(object):
             action = self.policy_net(obs).argmax().item()
         return action
 
-    def choose_action(self, obs, n_passes=10, threshold=0.5):
+    def choose_action(self, obs, n_passes=10, threshold=0.4):
         # 1. PRIORITÉ ABSOLUE À L'EXPLORATION CLASSIQUE (Epsilon)
         # Au début, eps = 1.0, donc il va obligatoirement tester des actions au hasard,
         # ce qui garantit qu'il finira par appuyer sur "FIRE" (action 1) pour lancer la balle.

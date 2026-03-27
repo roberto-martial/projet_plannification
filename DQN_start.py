@@ -27,7 +27,9 @@ env, state_space, action_space = init_gym_env(env_name)
     
 # Create an agent
 agent = DQAgent(replace_target_cnt=5000, env=env, state_space=state_space, action_space=action_space, model_name='breakout_model', gamma=.99,
-                eps_strt=1.0, eps_end=.001, eps_dec=5e-6, batch_size=32, lr=.001)
+                eps_strt=1.0, eps_end=.001, eps_dec=1e-3, batch_size=32, lr=.001)
 
 # Train num_eps amount of times and save onnx model
-agent.train(num_eps=5) ##75000
+#agent.train(num_eps=1000) ##75000
+
+agent.play_games(num_eps=7, render=True)
