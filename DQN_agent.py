@@ -1,25 +1,20 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import numpy as np
 import random
 import math
-import time
-from collections import deque  # Ajout de l'import pour le Frame Stacking
+from collections import deque
 from replay_mem import ReplayBuffer
 from DQN_model import DQN
 from transforms import Transforms
 from PIL import Image
 
-# This class trains and plays on the actual game
+
 class DQAgent(object):
-    # Take hyperparameters, as well as openai gym environment name
-    # Keeps the environment in the class. All learning/playing functions are built in
     def __init__(self, replace_target_cnt, env, state_space, action_space, 
                 model_name='breakout_model', gamma=0.99, eps_strt=0.1, 
                 eps_end=0.001, eps_dec=5e-6, batch_size=32, lr=0.001):
 
-        # Set global variables
         self.env = env
         self.state_space = state_space
         self.action_space = action_space
@@ -30,273 +25,199 @@ class DQAgent(object):
         self.eps_dec = eps_dec
         self.eps_end = eps_end
 
-        # Use GPU if available
         self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
-        # Initialise Replay Memory
         self.memory = ReplayBuffer()
 
-        # After how many training iterations the target network should update
         self.replace_target_cnt = replace_target_cnt
         self.learn_counter = 0
 
-        # Initialise policy and target networks, set target network to eval mode
         self.policy_net = DQN(self.state_space, self.action_space, filename=model_name).to(self.device)
         self.target_net = DQN(self.state_space, self.action_space, filename=model_name+'target').to(self.device)
         self.target_net.eval()
 
-        # If pretrained model of the modelname already exists, load it
         try:
             self.policy_net.load_model()
             print('loaded pretrained model')
         except:
             pass
         
-        # Set target net to be the same as policy net
         self.replace_target_net()
 
-        # Set optimizer & loss function
         self.optim = torch.optim.Adam(self.policy_net.parameters(), lr=self.LR)
         self.loss = torch.nn.SmoothL1Loss()
 
+    # -------------------- BATCH --------------------
     def sample_batch(self):
         batch = self.memory.sample_batch(self.batch_size)
-        state_shape = batch.state[0].shape
 
-        # Convert to tensors with correct dimensions
-    
-        state = torch.tensor(np.array(batch.state)).view(self.batch_size, -1, state_shape[1], state_shape[2]).float().to(self.device)
+        state = torch.tensor(np.array(batch.state) / 255.0).float().to(self.device)
+        state_ = torch.tensor(np.array(batch.state_) / 255.0).float().to(self.device)
         action = torch.tensor(np.array(batch.action)).unsqueeze(1).to(self.device)
         reward = torch.tensor(np.array(batch.reward)).float().unsqueeze(1).to(self.device)
-        state_ = torch.tensor(np.array(batch.state_)).view(self.batch_size, -1, state_shape[1], state_shape[2]).float().to(self.device)
         done = torch.tensor(np.array(batch.done)).float().unsqueeze(1).to(self.device)
 
         return state, action, reward, state_, done
 
-    # Returns the greedy action according to the policy net
+    # -------------------- ACTION --------------------
     def greedy_action(self, obs):
-        obs = torch.tensor(obs).float().to(self.device)
-        obs = obs.unsqueeze(0)
-        
-        # On s'assure que le réseau est en mode évaluation (Dropout désactivé) pour une vraie prédiction pure
+        obs = torch.tensor(obs).float().unsqueeze(0).to(self.device)
         self.policy_net.eval()
         with torch.no_grad():
             action = self.policy_net(obs).argmax().item()
         return action
 
     def choose_action(self, obs, n_passes=10, threshold=0.4):
-        # 1. PRIORITÉ ABSOLUE À L'EXPLORATION CLASSIQUE (Epsilon)
-        # Au début, eps = 1.0, donc il va obligatoirement tester des actions au hasard,
-        # ce qui garantit qu'il finira par appuyer sur "FIRE" (action 1) pour lancer la balle.
         if random.random() < self.eps:
-            return random.choice([x for x in range(self.action_space)])
+            return random.randrange(self.action_space)
 
-        # 2. SINON, ON UTILISE LE RÉSEAU ET LE DROPOUT
-        obs_tensor = torch.tensor(obs).float().to(self.device)
-        if len(obs_tensor.shape) == 3:
-            obs_tensor = obs_tensor.unsqueeze(0)
-        
+        obs_tensor = torch.tensor(obs).float().unsqueeze(0).to(self.device)
+
         self.policy_net.train()
         q_values_list = []
-        
+
         with torch.no_grad():
             for _ in range(n_passes):
                 q_values_list.append(self.policy_net(obs_tensor))
-                
-        q_values_stacked = torch.cat(q_values_list, dim=0)
-        
-        q_mean = q_values_stacked.mean(dim=0)
-        q_std = q_values_stacked.std(dim=0)
-        
+
+        q_values = torch.cat(q_values_list, dim=0)
+
+        q_mean = q_values.mean(dim=0)
+        q_std = q_values.std(dim=0)
+
         best_action = q_mean.argmax().item()
         uncertainty = q_std[best_action].item()
-        
-        # 3. L'ARBRE DE DÉCISION BASÉ SUR L'INCERTITUDE
+
         if uncertainty < threshold:
-            # Le modèle est confiant : Exploitation
             return best_action
         else:
-            # Le modèle doute : Exploration de secours
-            return random.choice([x for x in range(self.action_space)])
-    
-    # Stores a transition into memory
+            return random.randrange(self.action_space)
+
+    # -------------------- MEMORY --------------------
     def store_transition(self, *args):
         self.memory.add_transition(*args)
 
-    # Updates the target net to have same weights as policy net
     def replace_target_net(self):
         if self.learn_counter % self.replace_target_cnt == 0:
             self.target_net.load_state_dict(self.policy_net.state_dict())
             print('Target network replaced')
 
-    # Decrement epsilon 
     def dec_eps(self):
-        self.eps = self.eps - self.eps_dec if self.eps > self.eps_end \
-                        else self.eps_end
+        self.eps = max(self.eps - self.eps_dec, self.eps_end)
 
-    # Samples a single batch according to batchsize and updates the policy net
+    # -------------------- LEARNING --------------------
     def learn(self, num_iters=1):
         if self.memory.pointer < self.batch_size:
             return 
 
-        for i in range(num_iters):
+        for _ in range(num_iters):
 
-            # Sample batch
             state, action, reward, state_, done = self.sample_batch()
 
-            # Calculate the value of the action taken
+            # Q(s,a)
             q_eval = self.policy_net(state).gather(1, action)
 
-            # Calculate best next action value from the target net and detach from graph
-            q_next = self.target_net(state_).detach().max(1)[0].unsqueeze(1)
-            # Using q_next and reward, calculate q_target
-            # (1-done) ensures q_target is 0 if transition is in a terminating state
-            q_target = (1-done) * (reward + self.GAMMA * q_next) + (done * reward)
+            # 🔥 DOUBLE DQN
+            self.policy_net.eval()
+            next_actions = self.policy_net(state_).argmax(1).unsqueeze(1)
+            self.policy_net.train()
 
-            # Compute the loss
-            loss = self.loss(q_eval, q_target).to(self.device)
+            q_next = self.target_net(state_).gather(1, next_actions).detach()
 
-            # Perform backward propagation and optimization step
+            q_target = (1 - done) * (reward + self.GAMMA * q_next) + (done * reward)
+
+            loss = self.loss(q_eval, q_target)
+
             self.optim.zero_grad()
             loss.backward()
             self.optim.step()
 
-            # Increment learn_counter (for dec_eps and replace_target_net)
             self.learn_counter += 1
-
-            # Check replace target net
             self.replace_target_net()
 
-        # Save model & decrement epsilon
         self.policy_net.save_model()
         self.dec_eps()
 
-    # Save gif of an episode starting num_transitions ago from memory
-    def save_gif(self, num_transitions):
-        frames = []
-        for i in range(self.memory.pointer - num_transitions, self.memory.pointer):
-            frame = Image.fromarray(self.memory.memory[i].raw_state, mode='RGB')
-            frames.append(frame)
-        
-        if frames:
-            frames[0].save('episode.gif', format='GIF', append_images=frames[1:], save_all=True, duration=10, loop=0)
-
-    # Plays num_eps amount of games, while optimizing the model after each episode
+    # -------------------- TRAIN --------------------
     def train(self, num_eps=100, render=True):
         scores = []
-        max_score = 0
-        stack_size = 4  # On définit la taille de l'empilement
+        stack_size = 4
 
         for i in range(num_eps):
-            done = False
             obs, _ = self.env.reset()
-            
-            # Prétraitement initial et retrait de la dimension de canal éventuelle (ex: 1x84x84 -> 84x84)
-            processed_frame = np.squeeze(Transforms.to_gray(obs))
-            
-            # Initialisation du deque avec 4 copies de la première image
-            stacked_frames = deque([processed_frame for _ in range(stack_size)], maxlen=stack_size)
-            
-            # Création de l'état initial (4, 84, 84)
-            state = np.stack(stacked_frames, axis=0)
-            
+            obs, _, _, _, _ = self.env.step(1)  # FIRE
+
+            processed = np.squeeze(Transforms.to_gray(obs))
+            frames = deque([processed]*stack_size, maxlen=stack_size)
+
+            state = np.stack(frames, axis=0)
+
+            done = False
             score = 0
-            cnt = 0
+            steps = 0
+
             while not done:
-                # Take action
                 action = self.choose_action(state)
-                
                 obs_, reward, terminated, truncated, _ = self.env.step(action)
+
+                reward = np.clip(reward, -1, 1)
                 done = terminated or truncated
-                
+
                 if render:
                     self.env.render()
 
-                # Preprocess next state
-                processed_frame_ = np.squeeze(Transforms.to_gray(obs, obs_))
-                
-                # Ajout de la nouvelle image au deque (la plus ancienne est éjectée)
-                stacked_frames.append(processed_frame_)
-                
-                # Nouvel état empilé
-                state_ = np.stack(stacked_frames, axis=0)
-                
-                # Store transition
+                processed_ = np.squeeze(Transforms.to_gray(obs_))
+                frames.append(processed_)
+
+                state_ = np.stack(frames, axis=0)
+
                 self.store_transition(state, action, reward, state_, int(done), obs)
 
-                score += reward
-                obs = obs_
                 state = state_
-                cnt += 1
+                obs = obs_
 
-            # Maintain record of the max score achieved so far
-            if score > max_score:
-                max_score = score
-
-            # Save a gif if episode is best so far
-            if score > 300 and score >= max_score:
-                self.save_gif(cnt)
+                score += reward
+                steps += 1
 
             scores.append(score)
-            print(f'Episode {i}/{num_eps}: \n\tScore: {score}\n\tAvg score (past 100): {np.mean(scores[-100:])}\
-                \n\tEpsilon: {self.eps}\n\tTransitions added: {cnt}')
-            
-            # Train on as many transitions as there have been added in the episode
-            print(f'Learning x{math.ceil(cnt/self.batch_size)}')
-            self.learn(math.ceil(cnt/self.batch_size))
+
+            print(f'Episode {i}/{num_eps} | Score: {score} | Avg: {np.mean(scores[-100:])} | Eps: {self.eps}')
+
+            self.learn(math.ceil(steps / self.batch_size))
 
         self.env.close()
 
-    # This function simply lets a pretrained model be evaluated to play a game
-    # No learning will be done
+    # -------------------- PLAY --------------------
     def play_games(self, num_eps, render=True):
-        # Set network to eval mode
         self.policy_net.eval()
-        scores = []
-        stack_size = 4  # Même taille d'empilement que pour l'entraînement
 
         for i in range(num_eps):
-            done = False
             obs, _ = self.env.reset()
-            
-            # Prétraitement initial
-            processed_frame = np.squeeze(Transforms.to_gray(obs))
-            
-            # Initialisation du deque
-            stacked_frames = deque([processed_frame for _ in range(stack_size)], maxlen=stack_size)
-            state = np.stack(stacked_frames, axis=0)
-            
+            obs, _, _, _, _ = self.env.step(1)
+
+            frames = deque([np.squeeze(Transforms.to_gray(obs))]*4, maxlen=4)
+            state = np.stack(frames, axis=0)
+
+            done = False
             score = 0
-            cnt = 0
+
             while not done:
-                # Take the greedy action and observe next state
                 action = self.greedy_action(state)
-                
                 obs_, reward, terminated, truncated, _ = self.env.step(action)
+
                 done = terminated or truncated
-                
+
                 if render:
                     self.env.render()
 
-                # Preprocess next state
-                processed_frame_ = np.squeeze(Transforms.to_gray(obs, obs_))
-                stacked_frames.append(processed_frame_)
-                state_ = np.stack(stacked_frames, axis=0)
-                
-                self.store_transition(state, action, reward, state_, int(done), obs)
+                processed_ = np.squeeze(Transforms.to_gray(obs_))
+                frames.append(processed_)
 
-                # Calculate score, set next state and obs and increment counter
-                score += reward
+                state = np.stack(frames, axis=0)
                 obs = obs_
-                state = state_
-                cnt += 1
 
-            # If the score is more than 300, save a gif of that game
-            if score > 300:
-                self.save_gif(cnt)
-            
-            scores.append(score)
-            print(f'Episode {i}/{num_eps}: \n\tScore: {score}\n\tAvg score (past 100): {np.mean(scores[-100:])}\
-                \n\tEpsilon: {self.eps}\n\tSteps made: {cnt}')
-        
+                score += reward
+
+            print(f'Episode {i}: Score = {score}')
+
         self.env.close()
