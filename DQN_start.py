@@ -1,10 +1,11 @@
 from DQN_agent import DQAgent
-import gym
+import gymnasium as gym
 from transforms import Transforms
 import numpy as np
+import ale_py
 
 # Specify environment location
-env_name = 'BreakoutNoFrameskip-v4'
+env_name = "ALE/Breakout-v5"
 
 # Initializes an openai gym environment
 
@@ -30,6 +31,6 @@ agent = DQAgent(replace_target_cnt=5000, env=env, state_space=state_space, actio
                 eps_strt=1.0, eps_end=.001, eps_dec=1e-3, batch_size=32, lr=.001)
 
 # Train num_eps amount of times and save onnx model
-#agent.train(num_eps=1000) ##75000
+agent.train(num_eps=75000) ##75000
 
-agent.play_games(num_eps=7, render=True)
+#agent.play_games(num_eps=7, render=True)
