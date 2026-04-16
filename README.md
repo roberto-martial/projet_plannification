@@ -41,7 +41,7 @@ L’implémentation inclut plusieurs améliorations du DQN classique :
 
 ---
 
-## ▶️ Lancer l’entraînement
+## Lancer l’entraînement
 
 ### Commande de base :
 
@@ -51,7 +51,7 @@ python DQN_start.py
 
 ---
 
-## ⚙️ Paramètres principaux
+##  Paramètres principaux
 
 Les paramètres peuvent être modifiés directement dans `main.py` :
 
@@ -69,7 +69,7 @@ Les paramètres peuvent être modifiés directement dans `main.py` :
 
 ---
 
-## 💾 Sauvegarde du modèle
+##  Sauvegarde du modèle
 
 Les modèles sont automatiquement sauvegardés dans :
 
@@ -85,7 +85,7 @@ breakout_v5_v1.pth
 
 ---
 
-## ▶️ Tester un modèle entraîné
+##  Tester un modèle entraîné
 
 Pour charger un modèle existant, modifier dans `DQN_start.py` :
 
