@@ -18,8 +18,8 @@ L’implémentation inclut plusieurs améliorations du DQN classique :
 ##  Environnement d’exécution
 
 * **Langage** : Python
-* **Version recommandée** : Python 3.10 – 3.12
-* **Plateforme testée** : Windows / Linux
+* **Version recommandée** : Python 3.10 
+* **Plateforme testée** : Windows 
 * **Exécution** : CPU 
 
 ---
@@ -46,7 +46,7 @@ L’implémentation inclut plusieurs améliorations du DQN classique :
 ### Commande de base :
 
 ```bash
-python main.py
+python DQN_start.py
 ```
 
 ---
@@ -87,7 +87,7 @@ breakout_v5_v1.pth
 
 ## ▶️ Tester un modèle entraîné
 
-Pour charger un modèle existant, modifier dans `main.py` :
+Pour charger un modèle existant, modifier dans `DQN_start.py` :
 
 ```python
 load_model = True
@@ -97,7 +97,7 @@ model_path = "./models/breakout_v5_v1.pth"
 Puis exécuter :
 
 ```bash
-python main.py
+python DQN_start.py
 ```
 
 ---
